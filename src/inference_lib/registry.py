@@ -63,6 +63,8 @@ class ModelSpec:
     trust_remote_code: bool = False
     vllm_args: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
+    # legacy images carry their own working env: don't add the launcher's defaults (CUDA compat path, timeouts)
+    keep_image_env: bool = False
     # recommended GPU count on one 8xH100 node for max throughput
     recommended_gpus: int | None = None
     # in-flight requests `inference batch` keeps by default (None: 256 per GPU); servers cap

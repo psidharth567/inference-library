@@ -11,7 +11,7 @@ export PATH=$INFERENCE_LIB_ROOT/.venv/bin:$PATH      # bash scripts/setup_env.sh
 
 GPU nodes: `ssh -o BatchMode=yes bodhanai-node0XX`. Docker works without sudo there. `/projects`
 is shared, but each node has its own `/tmp`. Run `inference serve/chat/batch` ON the GPU node.
-Pull images with `scripts/pull_image.sh <host>...`.
+Pull the default image with `scripts/pull_image.sh <host>...`.
 
 ## Translate a request into this first
 

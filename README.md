@@ -22,12 +22,9 @@ and stop it afterwards (`--keep-server` to leave it up, `--no-auto-serve` to req
 
 ## Images
 
-| tag (`ghcr.io/psidharth567/inference-library:`) | contents | used by |
+| image | contents | used by |
 |---|---|---|
-| `vllm-v0.30.0` | official `vllm/vllm-openai:v0.30.0` (identical layers + source label) | every preset |
-
-Dockerfiles: `docker/*/Dockerfile`. Both are label-only rebuilds; `docker inspect -f '{{.RootFS.Layers}}'`
-matches the source image layer for layer.
+| `ghcr.io/psidharth567/inference-library:vllm-v0.30.0` (public) | official `vllm/vllm-openai:v0.30.0`, identical layers + source label (`docker/vllm-v0.30.0`) | every preset |
 
 ## Models
 
@@ -106,6 +103,8 @@ The nodes run driver 535 (CUDA 12.2). The notes below explain launcher choices t
   With host IPC, systemd-logind's RemoveIPC deletes that uid's semaphores in /dev/shm whenever
   one of its ssh sessions closes, which kills multi-GPU startup (`SemLock ... FileNotFoundError`).
   Containers get a private `--shm-size 64g` instead.
+- **Containers get an `/etc/passwd` entry for your uid** (the image's file plus one line). Older
+  vLLM/torch call `getpwuid()` and crash without one.
 - **Caches are node-local and per server.** When servers shared one cache on /projects,
   concurrent starts produced corrupt Inductor entries ("CUDA driver error: file not found")
   and missing FlashInfer cubins (`Assertion failed: !cubin.empty()`).

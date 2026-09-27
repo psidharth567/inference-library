@@ -1,0 +1,29 @@
+hf_repo: deepseek-ai/DeepSeek-V4-Flash
+description: DeepSeek V4 Flash on the legacy pre-0.30 stack (exact August 2026 server)
+# Reproduces the container `deepseek-v4-flash` (node024, 2026-08-11) argument for argument.
+# Local-only image (not on any registry): vLLM nightly 0.1.dev15833+g62d441ee8, torch
+# 2.11.0+cu130, transformers 4.57.6, with the breakable-CUDA-graph patch for driver 535.
+# Image id sha256:c89bba31fc32...; copy it to a node with scripts/copy_image.sh.
+# Same weights as deepseek-v4-flash (config/index/tokenizer md5 and all 46 shard sizes match).
+image: vllm-dsv4-flash:cu130-breakable
+keep_image_env: true
+served_model_name: deepseek-v4-flash
+tensor_parallel_size: 8
+enable_expert_parallel: true
+recommended_gpus: 8
+max_model_len: 16384
+gpu_memory_utilization: 0.92
+max_num_seqs: 256
+max_num_batched_tokens: 16384
+kv_cache_dtype: fp8
+tokenizer_mode: deepseek_v4
+reasoning_parser: deepseek_v4
+tool_call_parser: deepseek_v4
+trust_remote_code: true
+vllm_args: ["--block-size", "256", "--optimization-level", "3", "--no-enable-prefix-caching",
+            "-cc.cudagraph_mode=FULL_DECODE_ONLY"]
+env:  # set on the original container on top of the image env
+  NCCL_NVLS_ENABLE: "1"
+  VLLM_ALLREDUCE_USE_FLASHINFER: "1"
+  VLLM_MARLIN_USE_ATOMIC_ADD: "1"
+  VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: "64"

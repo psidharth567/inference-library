@@ -199,7 +199,7 @@ class LaunchPlan:
         self.served_model_name = served_model_name or self.spec.served_model_name or self.spec.key
         self.name = name or f"{CONTAINER_PREFIX}{self.spec.key}-{port}"
         self.home = cache_root() / self.name
-        self.env = {**BASE_ENV, **self.spec.env, **(env or {})}
+        self.env = {**({} if self.spec.keep_image_env else BASE_ENV), **self.spec.env, **(env or {})}
         extra = list(vllm_args or [])
         tok = prepare_tokenizer_override(self.spec, self.model_path)
         if tok is not None and "--tokenizer" not in extra:
@@ -253,6 +253,11 @@ class LaunchPlan:
             f"{hf}:{hf}",
             "-v",
             f"{TOKENIZER_DIR}:{CONTAINER_TOKENIZERS}:ro",
+            # the calling uid has no passwd entry in the image; older vLLM/torch call getpwuid()
+            "-v",
+            f"{self.home / '.passwd'}:/etc/passwd:ro",
+            "-v",
+            f"{self.home / '.group'}:/etc/group:ro",
         ]
         for k, v in self.env.items():
             cmd += ["-e", f"{k}={v}"]
@@ -269,6 +274,25 @@ class LaunchPlan:
 
 
 # ---------------------------------------------------------------- lifecycle
+
+
+def write_identity_files(image: str, home: Path) -> None:
+    """``home/.passwd`` / ``home/.group``: the image's own files plus an entry for the calling
+    uid/gid (HOME = the container home), mounted over /etc/passwd and /etc/group."""
+    uid, gid = os.getuid(), os.getgid()
+    entries = (
+        ("passwd", "root:x:0:0:root:/root:/bin/bash\n", f"inference:x:{uid}:{gid}::{CONTAINER_HOME}:/bin/bash", uid),
+        ("group", "root:x:0:\n", f"inference:x:{gid}:", gid),
+    )
+    for name, fallback, line, own_id in entries:
+        r = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "cat", image, f"/etc/{name}"], capture_output=True, text=True
+        )
+        content = r.stdout if r.returncode == 0 and r.stdout.strip() else fallback
+        ids = {f.split(":")[2] for f in content.splitlines() if f.count(":") >= 2}
+        if str(own_id) not in ids:
+            content = content.rstrip("\n") + "\n" + line + "\n"
+        (home / f".{name}").write_text(content)
 
 
 def _docker_state(name: str) -> str | None:
@@ -324,6 +348,7 @@ class VllmServer:
             if shutil.which("docker") is None:
                 raise RuntimeError("docker not found; install it or pass --no-docker")
             subprocess.run(["docker", "rm", "-f", self.plan.name], capture_output=True)
+            write_identity_files(self.plan.image, self.plan.home)
             r = subprocess.run(self.plan.command(), capture_output=True, text=True)
             if r.returncode != 0:
                 raise RuntimeError(f"docker run failed: {r.stderr.strip()}")

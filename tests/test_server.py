@@ -82,3 +82,15 @@ def test_deployment_single_server_uses_internal_dp(monkeypatch):
     assert len(dep.plans) == 1
     args = dep.plans[0].args
     assert args[args.index("--data-parallel-size") + 1] == "4"
+
+
+def test_legacy_presets_keep_image_env():
+    from inference_lib.server import LaunchPlan
+
+    for key, image in (
+        ("glm-5.3-flash-legacy", "toolkit/inference-glm53:12.8"),
+        ("deepseek-v4-flash-legacy", "vllm-dsv4-flash:cu130-breakable"),
+    ):
+        cmd = LaunchPlan(key, gpus=list(range(8)), docker=True).command()
+        assert image in cmd
+        assert not any(c.startswith(("LD_LIBRARY_PATH=", "VLLM_ENGINE_READY_TIMEOUT_S=")) for c in cmd), key
