@@ -129,8 +129,11 @@ inference serve MODEL [--port 8000] [--gpus 0,1 | --num-gpus N] [--max-model-len
 inference stop [--port P]            # containers serving port P and above (all if omitted)
 inference status [--port P]
 inference chat  -m MODEL -p "..." [--system-prompt ...] [--thinking on|off] [--show-reasoning] [-o out.json]
-inference batch -m MODEL -i IN -o OUT [--concurrency 256] [--temperature ..] [--top-p ..] [--top-k ..]
+inference batch -m MODEL -i IN -o OUT [--concurrency N] [--temperature ..] [--top-p ..] [--top-k ..]
                 [--seed ..] [--max-tokens ..] [--thinking on|off] [--extra-body JSON] [--dry-run]
+                [--n K] [--json | --json-schema FILE] [--retry-on ...] [--validator f.py:func]
+                [--nodes h1,h2,...] [--max-restarts 3] [--stall-timeout 1800] [--allow-mixed]
+inference summary OUT.jsonl
 inference bench [--port P] [--input-len 1024 --output-len 1024 --concurrency 256]
 ```
 
@@ -141,13 +144,35 @@ the same arguments.
 ### Batch I/O
 
 Input is `jsonl`, `json`, `csv`, `tsv`, `txt`, `yaml` or `parquet` (by extension, or
-`--input-format`). The prompt column is `prompt`/`prompts`/`text`/`input`/`question`/...
-System prompt precedence: per-row `system` > `--system-prompt(-file)` / `$INFERENCE_SYSTEM_PROMPT` > none.
+`--input-format`). A row is either a prompt (column `prompt`/`prompts`/`text`/`input`/`question`/...)
+or a multi-turn conversation in `messages` (a list of `{role, content}`; in CSV a JSON string).
+System prompt precedence: per-row `system` > `--system-prompt(-file)` / `$INFERENCE_SYSTEM_PROMPT` > none
+(prepended to `messages` rows that have no system turn).
 
-Output rows keep all input columns and add `_idx`, `responses`, `reasoning`, `finish_reason`,
-`prompt_tokens`, `completion_tokens` and `error`. Every format streams through a JSONL file,
-appended and fsync'd per row. Re-running the same command resumes: rows that already succeeded
-are skipped and failed rows are retried. Non-JSONL outputs are written from that file at the end.
+Output rows keep all input columns and add `_idx` (plus `_sample` with `--n`), `responses`,
+`reasoning`, `finish_reason`, `prompt_tokens`, `completion_tokens`, `attempts`, `retry_reasons`,
+`error`, and `parsed` in JSON mode. Every format streams through a JSONL file, appended and
+fsync'd per row. Re-running the same command resumes: outputs that already succeeded are skipped
+and failed ones are retried. Non-JSONL outputs are written from that file at the end.
+
+### Reliability and scale-out
+
+| feature | flags | behaviour |
+|---|---|---|
+| Structured output | `--json`, `--json-schema FILE` | guided decoding on the server (`response_format`); every answer is parsed (and schema-checked); result in `parsed` |
+| Re-asking bad outputs | `--retry-on empty,length,invalid-json,schema,validator`, `--validation-retries 2`, `--no-corrective`, `--max-tokens-cap` | default: `empty`, plus `invalid-json,schema` in JSON mode and `validator` with `--validator`. JSON/schema/validator failures are re-asked with the rejected answer and the reason appended; `length` re-asks double `max_tokens`. Exhausted re-asks leave the row failed (retried on rerun) |
+| Custom checks | `--validator file.py:func` | `func(row, result)` returns an error message or `None`; `result` has `response`, `reasoning`, `finish_reason`, `parsed` |
+| Samples per row | `--n K` | K outputs per row (`_sample` 0..K-1); with `--seed S` sample k uses seed S+k |
+| Server watchdog | `--max-restarts 3`, `--stall-timeout 1800`, `--server-wait 900`, `--request-timeout 3600` | a request error on an unhealthy server triggers a restart of that server (servers this run started) or a wait (servers it didn't); requests that hit the outage are retried without spending their attempts. No finished request for `--stall-timeout` with requests in flight also restarts. Out of restarts: the batch stops, resumable |
+| Multi-node | `--nodes host1,host2,...` | the coordinator (any host) snapshots the remaining work, assigns it round-robin, and starts one worker per node over ssh; each serves the model locally and writes `<output>.shards/<host>.jsonl`; shards are merged into the output. Paths must be on shared storage. Rerun resumes, also with other nodes |
+| Reproducibility stamp | `--allow-mixed` | `<output>.meta.json` records the observed stack (vLLM version, served models, image + image id per server, host), preset file hash, sampling + validation, input sha256, and each run with its summary. Resuming into an output made with a different stack or settings is refused unless `--allow-mixed` (recorded) |
+| Run summary | `inference summary OUT.jsonl` | printed after every batch and stored in the stamp: ok/failed by error type, truncations (and truncations with no answer), empties, re-asks by reason, token totals, this run's throughput and restarts |
+
+Measured on 2026-09-27 (Qwen3-8B, 8xH100 per node):
+- **Watchdog:** killing the server container mid-batch at 1,555/10,552 outputs led to one
+  automatic restart, and all 10,552 outputs completed (42.7k completion tok/s over the whole run).
+- **Multi-node:** 2 nodes produced 5,276 outputs, fingerprints identical across nodes.
+- **Structured output:** schema-guided JSON gave 604/604 valid answers.
 
 ### Python
 

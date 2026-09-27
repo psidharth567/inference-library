@@ -3,14 +3,31 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.util
 import json
 import os
+import signal
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from .client import SamplingParams, build_messages, chat, get_client, resolve_model_id, run_batch
+from .client import (
+    BatchStats,
+    SamplingParams,
+    Validation,
+    build_messages,
+    chat,
+    format_summary,
+    get_client,
+    json_schema_format,
+    read_jsonl_rows,
+    resolve_model_id,
+    run_batch,
+    summarize,
+)
 from .io import (
     SUPPORTED_INPUT_FORMATS,
     SUPPORTED_OUTPUT_FORMATS,
@@ -30,6 +47,8 @@ from .server import (
     server_ready,
     stop_containers,
 )
+from .stamp import build_stamp, check_resume, fingerprint, meta_path, observe_server, preset_info, write_stamp
+from .watchdog import ServerPool
 
 DEFAULT_PORT = int(os.environ.get("INFERENCE_PORT", "8000"))
 
@@ -192,6 +211,13 @@ def cmd_status(args) -> int:
 def _sampling(args) -> SamplingParams:
     thinking = None if args.thinking is None else args.thinking == "on"
     extra = json.loads(args.extra_body) if args.extra_body else {}
+    schema = _json_schema(args)
+    if schema is not None:
+        response_format = json_schema_format(schema)
+    elif getattr(args, "json", False):
+        response_format = {"type": "json_object"}
+    else:
+        response_format = None
     return SamplingParams(
         max_tokens=args.max_tokens,
         temperature=args.temperature,
@@ -199,6 +225,7 @@ def _sampling(args) -> SamplingParams:
         top_k=args.top_k,
         seed=args.seed,
         enable_thinking=thinking,
+        response_format=response_format,
         extra_body=extra,
     )
 
@@ -236,6 +263,50 @@ def cmd_chat(args) -> int:
             server.shutdown()
 
 
+def _load_validator(spec: str):
+    """``path/to/file.py:func`` or ``package.module:func``; func(row, result) -> error or None."""
+    target, func = spec.rsplit(":", 1)
+    if target.endswith(".py"):
+        mspec = importlib.util.spec_from_file_location("inference_user_validator", target)
+        mod = importlib.util.module_from_spec(mspec)
+        mspec.loader.exec_module(mod)
+    else:
+        mod = importlib.import_module(target)
+    return getattr(mod, func)
+
+
+def _json_schema(args) -> dict | None:
+    return json.loads(Path(args.json_schema).read_text()) if getattr(args, "json_schema", None) else None
+
+
+def _validation(args) -> Validation:
+    schema = _json_schema(args)
+    json_mode = bool(args.json) or schema is not None
+    if args.retry_on is None:
+        retry = (
+            {"empty"}
+            | ({"invalid-json", "schema"} if json_mode else set())
+            | ({"validator"} if args.validator else set())
+        )
+    elif args.retry_on.strip() == "none":
+        retry = set()
+    else:
+        retry = {x.strip() for x in args.retry_on.split(",") if x.strip()}
+    return Validation(
+        retry_on=frozenset(retry),
+        max_retries=args.validation_retries,
+        json_output=json_mode,
+        schema=schema,
+        custom=_load_validator(args.validator) if args.validator else None,
+        corrective=not args.no_corrective,
+        max_tokens_cap=args.max_tokens_cap,
+    )
+
+
+def _on_sigterm(signum, frame):  # let finally-blocks stop the servers we started
+    raise SystemExit(128 + signum)
+
+
 def cmd_batch(args) -> int:
     in_fmt = args.input_format or detect_format(args.input)
     out_fmt = args.output_format or detect_format(args.output)
@@ -245,51 +316,134 @@ def cmd_batch(args) -> int:
         print("input validation failed:\n  " + "\n  ".join(errs), file=sys.stderr)
         return 1
     system = _system_prompt(args)
-    print(
-        f"{len(rows)} rows from {args.input} [{in_fmt}] -> {args.output} [{out_fmt}]\n{preview_rows(rows)}",
-        file=sys.stderr,
-    )
+    log = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+    log(f"{len(rows)} rows x {args.n} sample(s) from {args.input} [{in_fmt}] -> {args.output} [{out_fmt}]")
+    log(preview_rows(rows))
+    validation = _validation(args)
+    sampling = _sampling(args)
     if args.dry_run:
+        log(f"sampling {sampling.to_dict()}\nvalidation {validation.to_dict()}")
         return 0
-    if out_fmt != "jsonl" and args.output.exists() and not args.overwrite:
+    if out_fmt != "jsonl" and args.output.exists() and not args.overwrite and not args.shard_name:
         print(f"{args.output} exists; pass --overwrite", file=sys.stderr)
         return 1
-    # every format streams through a JSONL (resumable); other formats are converted at the end
-    jsonl = args.output if out_fmt == "jsonl" else args.output.with_name(args.output.name + ".partial.jsonl")
+    if args.nodes:
+        if args.base_url:
+            raise SystemExit("--nodes starts servers on each node; drop --base-url")
+        from . import multinode
+
+        return multinode.run(args, sys.argv[1:], n_rows=len(rows), log=log)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+    output = args.output.resolve()
+    final_jsonl = output if out_fmt == "jsonl" else output.with_name(output.name + ".partial.jsonl")
+    assign = None
+    done_from: list[Path] = []
+    references: list[Path] = []  # stamps whose fingerprint this run must match
+    if args.shard_name:  # worker of a multi-node batch
+        from .multinode import shard_dir
+
+        sdir = shard_dir(output)
+        jsonl = sdir / f"{args.shard_name}.jsonl"
+        assigned = {tuple(k) for k in json.loads(Path(args.assignment).read_text())[args.shard_name]}
+        assign = lambda todo: [k for k in todo if k in assigned]  # noqa: E731
+        done_from = [p for p in [final_jsonl, *sdir.glob("*.jsonl")] if p != jsonl and p.exists()]
+        references = [output, *(p for p in sdir.glob("*.jsonl") if p != jsonl)]
+        expected = len(assigned)
+    else:
+        jsonl = final_jsonl
+        expected = len(rows) * args.n
     jsonl.parent.mkdir(parents=True, exist_ok=True)
-    log = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
-    server, base_urls = _servers_for(args, log)
+
+    dep, base_urls = _servers_for(args, log)
     try:
-        clients = [get_client(u) for u in base_urls]
+        clients = [get_client(u, timeout=args.request_timeout) for u in base_urls]
+        pool = ServerPool(
+            base_urls,
+            recover=dep.restart if dep is not None else None,
+            max_restarts=args.max_restarts,
+            stall_timeout=args.stall_timeout,
+            server_wait=args.server_wait,
+            log=log,
+        )
         spec = resolve_model(args.model)
         concurrency = args.concurrency or (spec.default_concurrency(args.num_gpus) if spec else 256 * len(base_urls))
         model = resolve_model_id(clients[0], _served_name(args.model))
-        log(f"generating with {model} on {len(base_urls)} server(s): {', '.join(base_urls)}")
-        t0 = time.time()
+        servers = [observe_server(u) for u in base_urls]
+        preset = preset_info(args.model)
+        fp = fingerprint(servers, preset, sampling.to_dict(), validation.to_dict(), args.n, system)
+        for ref in references:
+            check_resume(ref, fp, allow_mixed=args.allow_mixed)
+        previous = check_resume(jsonl if args.shard_name else output, fp, allow_mixed=args.allow_mixed)
+        stamp_target = jsonl if args.shard_name else output
+        run_rec = {
+            "host": socket.gethostname(),
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "argv": sys.argv[1:],
+            "status": "running",
+        }
+        stamp = build_stamp(
+            input_path=args.input,
+            n_rows=len(rows),
+            servers=servers,
+            preset=preset,
+            fp=fp,
+            previous=previous,
+            run=run_rec,
+        )
+        write_stamp(stamp_target, stamp)
+        log(f"generating with {model} on {len(base_urls)} server(s): {', '.join(base_urls)}; concurrency {concurrency}")
+        stats = BatchStats()
         out_rows = run_batch(
             client=clients,
             rows=rows,
             model=model,
-            params=_sampling(args),
+            params=sampling,
             concurrency=concurrency,
             retries=args.retries,
             global_system=system,
             jsonl_path=jsonl,
             log=log,
             use_tqdm=not args.no_tqdm,
+            n_samples=args.n,
+            validation=validation,
+            pool=pool,
+            done_from=done_from,
+            assign=assign,
+            stats=stats,
         )
-        dt = time.time() - t0
-        n_ok = sum(1 for r in out_rows if not r.get("error"))
-        toks = sum(r.get("completion_tokens") or 0 for r in out_rows)
-        log(f"{n_ok}/{len(rows)} rows ok in {dt:.0f}s ({toks / max(dt, 1e-9):.0f} completion tok/s this run)")
-        if out_fmt != "jsonl":
+        summary = summarize(out_rows, stats=stats)
+        run_rec.update(
+            finished_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            status="aborted" if stats.aborted else "finished",
+            summary=summary,
+        )
+        stamp["summary"] = summary
+        write_stamp(stamp_target, stamp)
+        log(format_summary(summary))
+        if not args.shard_name and out_fmt != "jsonl":
             write_output(args.output, out_rows, out_fmt)
-            jsonl.unlink(missing_ok=True)
-        log(f"wrote {args.output}")
-        return 0 if n_ok == len(rows) else 2
+            final_jsonl.unlink(missing_ok=True)
+        log(f"wrote {jsonl if args.shard_name else args.output}")
+        return 0 if summary["ok"] >= expected and not stats.aborted else 2
     finally:
-        if server:
-            server.shutdown()
+        if dep:
+            dep.shutdown()
+
+
+def cmd_summary(args) -> int:
+    rows = read_jsonl_rows(args.file) if args.file.suffix == ".jsonl" else load_input(args.file)
+    print(format_summary(summarize(rows)))
+    mp = meta_path(args.file)
+    if mp.exists():
+        st = json.loads(mp.read_text())
+        fp = st.get("fingerprint", {})
+        print(
+            f"stamp {mp.name}: vLLM {fp.get('vllm_versions')}, images {fp.get('image_ids')}, "
+            f"preset {fp.get('preset')} ({str(fp.get('preset_sha256'))[:12]}), runs {len(st.get('runs', []))}"
+            + (f", MIXED setups {len(st['mixed_with'])}x" if st.get("mixed_with") else "")
+        )
+    return 0
 
 
 def cmd_bench(args) -> int:
@@ -386,6 +540,15 @@ def _add_gen_args(p: argparse.ArgumentParser) -> None:
         help="chat_template_kwargs.enable_thinking for hybrid-reasoning models (default: template default)",
     )
     p.add_argument("--extra-body", default=None, help="JSON merged into the request body, e.g. '{\"min_p\": 0.05}'")
+    p.add_argument(
+        "--json", action="store_true", help="ask for a JSON object (server-side guided decoding) and parse it"
+    )
+    p.add_argument(
+        "--json-schema",
+        type=Path,
+        default=None,
+        help="JSON Schema file: guided decoding + validation of every answer (implies --json)",
+    )
     _add_launch_args(p)
 
 
@@ -429,10 +592,66 @@ def build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--overwrite", action="store_true", help="replace an existing non-JSONL output")
     pb.add_argument("--dry-run", action="store_true", help="validate + preview the input only")
     pb.add_argument("--concurrency", type=int, default=None, help="in-flight requests (default: preset, ~256 per GPU)")
-    pb.add_argument("--retries", type=int, default=3)
+    pb.add_argument("--retries", type=int, default=3, help="attempts per output on request errors")
     pb.add_argument("--no-tqdm", action="store_true")
+    pb.add_argument("--n", type=int, default=1, help="samples per row (seed+k per sample when --seed is set)")
+    q = pb.add_argument_group("output validation / re-asking")
+    q.add_argument(
+        "--retry-on",
+        default=None,
+        help="comma list of empty,length,invalid-json,schema,validator or 'none' "
+        "(default: empty, plus invalid-json,schema with --json/--json-schema, plus validator)",
+    )
+    q.add_argument("--validation-retries", type=int, default=2, help="max re-asks per output for --retry-on reasons")
+    q.add_argument(
+        "--no-corrective",
+        action="store_true",
+        help="re-ask with the original messages only (default: show the rejected answer + reason)",
+    )
+    q.add_argument(
+        "--max-tokens-cap",
+        type=int,
+        default=None,
+        help="on 'length' re-asks max_tokens doubles up to this (default 4x --max-tokens)",
+    )
+    q.add_argument(
+        "--validator",
+        default=None,
+        help="file.py:func or module:func; func(row, result) returns an error string or None",
+    )
+    w = pb.add_argument_group("server watchdog")
+    w.add_argument("--max-restarts", type=int, default=3, help="server restarts before the batch stops (resumable)")
+    w.add_argument(
+        "--stall-timeout",
+        type=float,
+        default=1800.0,
+        help="restart servers when requests are in flight but none finished for this long (0: off)",
+    )
+    w.add_argument(
+        "--server-wait",
+        type=float,
+        default=900.0,
+        help="for servers this run did not start: how long to wait for them to come back",
+    )
+    w.add_argument("--request-timeout", type=float, default=3600.0, help="per-request HTTP timeout (seconds)")
+    m = pb.add_argument_group("multi-node / reproducibility")
+    m.add_argument(
+        "--nodes", default=None, help="comma list of GPU hosts: serve the model on each and split the batch across them"
+    )
+    m.add_argument(
+        "--allow-mixed",
+        action="store_true",
+        help="resume into an output generated with a different stack/settings (recorded in the stamp)",
+    )
+    m.add_argument("--assignment", default=None, help=argparse.SUPPRESS)
+    m.add_argument("--shard-name", default=None, help=argparse.SUPPRESS)
+    m.add_argument("--run-token", default=None, help=argparse.SUPPRESS)
     _add_gen_args(pb)
     pb.set_defaults(func=cmd_batch)
+
+    psm = sub.add_parser("summary", help="summarize a batch output (counts, truncations, tokens, stamp)")
+    psm.add_argument("file", type=Path)
+    psm.set_defaults(func=cmd_summary)
 
     pbe = sub.add_parser("bench", help="throughput benchmark against a running server")
     pbe.add_argument("--port", type=int, default=DEFAULT_PORT)

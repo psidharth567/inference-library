@@ -302,9 +302,14 @@ def validate_rows(rows: list[dict[str, Any]]) -> tuple[bool, list[str]]:
         return False, errors
     for i, r in enumerate(rows):
         try:
+            if r.get("messages"):
+                from .client import get_row_messages
+
+                get_row_messages(r)  # raises on malformed messages
+                continue
             p = r.get("prompts") or r.get("prompt") or r.get("text") or r.get("input")
             if not p or not str(p).strip():
-                errors.append(f"row {i}: missing prompt (expected 'prompts'/'prompt'/'text' column)")
+                errors.append(f"row {i}: missing prompt (expected 'prompts'/'prompt'/'text' or 'messages')")
         except Exception as e:
             errors.append(f"row {i}: {e}")
         if len(errors) >= 10:
@@ -316,7 +321,8 @@ def validate_rows(rows: list[dict[str, Any]]) -> tuple[bool, list[str]]:
 def preview_rows(rows: list[dict[str, Any]], n: int = 3) -> str:
     lines: list[str] = []
     for i, r in enumerate(rows[:n]):
-        p = str(r.get("prompts", r.get("prompt", "")))[:80].replace("\n", " ")
+        p = str(r.get("prompts", r.get("prompt", "")) or f"<{len(r.get('messages') or [])} messages>")[:80]
+        p = p.replace("\n", " ")
         s = str(r.get("system", ""))[:40].replace("\n", " ")
         lines.append(f"  [{i}] prompt={p!r}" + (f" system={s!r}" if s else ""))
     if len(rows) > n:

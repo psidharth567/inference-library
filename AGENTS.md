@@ -44,12 +44,19 @@ inference batch -m qwen3.5-35b-a3b --base-url http://127.0.0.1:8000/v1,http://12
 # fewer GPUs / specific GPUs / extra vLLM flags / print the docker command only
 inference serve qwen3-8b --gpus 0,1 --vllm-arg=--kv-cache-dtype=fp8 --dry-run
 
+# structured output, 4 samples per row, spread over three nodes (run from any host)
+inference batch -m qwen3-8b --nodes bodhanai-node001,bodhanai-node004,bodhanai-node021 \
+  -i in.jsonl -o out.jsonl --json-schema schema.json --n 4 --seed 1
+
+# what is in an output (counts, truncations, re-asks, tokens, which stack made it)
+inference summary out.jsonl
+
 # throughput check against a running server
 inference bench --port 8000 --concurrency 256
 ```
 
-Output rows: the input columns plus `_idx, responses, reasoning, finish_reason, prompt_tokens,
-completion_tokens, error`. Reasoning models return their thinking in `reasoning`, not
+Output rows: the input columns plus `_idx (_sample), responses, reasoning, finish_reason, prompt_tokens,
+completion_tokens, attempts, retry_reasons, error (, parsed)`. Every output gets `<output>.meta.json` (stack stamp + summary). Reasoning models return their thinking in `reasoning`, not
 `responses`. Check `finish_reason == "length"` counts before trusting a run: that is
 truncation at `--max-tokens`.
 
@@ -64,6 +71,8 @@ truncation at `--max-tokens`.
   in the preset and in the README table.
 - MoE models: set `data_parallel_size` (independent servers), unless a single-server
   layout is measured faster for that model.
+- Don't pass `--allow-mixed` to get past a refused resume: the refusal means the stack or settings
+  changed; write a new output unless mixing is intended.
 - Keep BF16 KV as the default; FP8 KV is opt-in (README has the quality measurement).
 - Big models (GLM-5.3-Flash, DSV4-Flash) take 5-15 min to start cold. Don't kill them before
   the preset's timeout; follow `logs/inference-<key>-<port>.log`.

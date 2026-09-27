@@ -15,6 +15,7 @@ Host notes baked in here (8xH100, driver 535 / CUDA 12.2):
 from __future__ import annotations
 
 import atexit
+import contextlib
 import hashlib
 import json
 import os
@@ -417,6 +418,21 @@ class VllmServer:
         if self._log_handle and not self._log_handle.closed:
             self._log_handle.close()
 
+    def restart(self) -> None:
+        """Stop this server (even one we reuse) and start it again from the same plan."""
+        if self.plan.docker:
+            subprocess.run(["docker", "rm", "-f", self.plan.name], capture_output=True, timeout=120)
+        elif self.proc is not None and self.proc.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+        if self._log_proc is not None and self._log_proc.poll() is None:
+            self._log_proc.terminate()
+        if self._log_handle and not self._log_handle.closed:
+            self._log_handle.close()
+        self._stopped = False
+        self.start()
+        self.wait_ready()
+
 
 class Deployment:
     """One model on ``num_gpus`` GPUs: a single server, or several independent servers on
@@ -486,6 +502,9 @@ class Deployment:
         except BaseException:
             self.shutdown()
             raise
+
+    def restart(self, i: int) -> None:
+        self.servers[i].restart()
 
     def alive(self) -> bool:
         return any(server_ready(u, timeout=30) for u in self.base_urls)

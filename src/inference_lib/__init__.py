@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = "0.3.0"
+
 from .client import (
     SamplingParams,
     build_messages,
@@ -34,8 +36,6 @@ from .server import (
     server_serves_model,
     stop_containers,
 )
-
-__version__ = "0.2.0"
 
 __all__ = [
     "REGISTRY",
