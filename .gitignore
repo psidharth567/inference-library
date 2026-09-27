@@ -9,3 +9,4 @@ outputs/
 __pycache__/
 *.pyc
 .pytest_cache/
+/.push.log
