@@ -1,0 +1,20 @@
+hf_repo: deepseek-ai/DeepSeek-V4-Flash
+description: DeepSeek V4 Flash MoE (FP4 experts / FP8), sparse MLA, thinking
+# One server, attention DP8 + expert parallel EP8 ("DP attention"): 23.0k out tok/s per node at
+# 4096 in flight (21.4k at 2048 with 256 seqs/rank) vs 9.2k for TP8+EP at its 512-concurrency
+# peak.  Under TP the MLA latent KV is replicated on every rank; under DP each rank keeps its own.
+tensor_parallel_size: 1
+enable_expert_parallel: true
+recommended_gpus: 8
+max_num_seqs: 512  # per DP rank
+batch_concurrency: 4096
+max_model_len: 65536
+tokenizer_mode: deepseek_v4
+reasoning_parser: deepseek_v4
+tool_call_parser: deepseek_v4
+trust_remote_code: true
+vllm_args: ["--api-server-count", "4"]
+env:
+  # FlashInfer's one-shot all-reduce (mnnvl and trtllm backends) hung TP=8 startup during
+  # CUDA-graph capture: rank 0 blocks in a lazy kernel load while its GPU spins in the all-reduce.
+  VLLM_ALLREDUCE_USE_FLASHINFER: "0"

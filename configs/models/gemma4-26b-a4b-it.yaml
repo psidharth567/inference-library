@@ -1,0 +1,10 @@
+hf_repo: google/gemma-4-26B-A4B-it
+description: Gemma 4 26B-A4B MoE instruct, VL
+# 4 independent TP=2 servers per node: 4.6k out tok/s/GPU vs 4.5k for one DP8+EP server and
+# 3.2k for one TP2xDP4 server; TP=1 is KV-starved (3.6k)
+tensor_parallel_size: 2
+data_parallel_size: 1
+recommended_gpus: 8
+max_model_len: 32768
+reasoning_parser: gemma4
+tool_call_parser: gemma4

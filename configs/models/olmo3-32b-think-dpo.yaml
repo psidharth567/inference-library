@@ -1,0 +1,7 @@
+hf_repo: allenai/Olmo-3-32B-Think-DPO
+description: OLMo 3 32B Think (DPO) dense, always reasons
+# TP2 x DP4: 1.75k out tok/s/GPU vs 1.70k at TP4
+tensor_parallel_size: 2
+recommended_gpus: 8
+max_model_len: 32768
+reasoning_parser: olmo3

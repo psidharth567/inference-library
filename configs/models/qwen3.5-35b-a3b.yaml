@@ -1,0 +1,10 @@
+hf_repo: Qwen/Qwen3.5-35B-A3B
+description: Qwen3.5 35B-A3B MoE, hybrid Gated-DeltaNet + attention, VL, thinking
+# 4 independent TP=2 servers per node (no EP): 6.2k out tok/s/GPU vs 5.2k for one DP8+EP8
+# server and 3.2k for one TP2xDP4 server (1k in / 1k out, 256 concurrent per GPU)
+tensor_parallel_size: 2
+data_parallel_size: 1
+recommended_gpus: 8
+max_model_len: 32768
+reasoning_parser: qwen3
+tool_call_parser: qwen3_coder

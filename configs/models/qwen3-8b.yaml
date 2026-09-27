@@ -1,0 +1,8 @@
+hf_repo: Qwen/Qwen3-8B
+description: Qwen3 8B dense, hybrid thinking
+# TP1 x DP8: 6.6k out tok/s/GPU (52.9k per node); TP2 6.4k/GPU
+tensor_parallel_size: 1
+recommended_gpus: 8
+max_model_len: 32768
+reasoning_parser: qwen3
+tool_call_parser: hermes

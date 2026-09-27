@@ -1,0 +1,8 @@
+hf_repo: Qwen/Qwen3.5-9B
+description: Qwen3.5 9B hybrid Gated-DeltaNet + attention, VL, thinking
+# TP1 x DP8: 8.8k out tok/s/GPU; TP2 8.0k/GPU
+tensor_parallel_size: 1
+recommended_gpus: 8
+max_model_len: 32768
+reasoning_parser: qwen3
+tool_call_parser: qwen3_coder

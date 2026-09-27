@@ -1,0 +1,8 @@
+hf_repo: Qwen/Qwen3-32B
+description: Qwen3 32B dense, hybrid thinking
+# TP2 x DP4: 1.95k out tok/s/GPU vs 1.85k at TP4 (KV-bound)
+tensor_parallel_size: 2
+recommended_gpus: 8
+max_model_len: 32768
+reasoning_parser: qwen3
+tool_call_parser: hermes

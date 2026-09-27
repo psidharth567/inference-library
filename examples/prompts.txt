@@ -1,0 +1,3 @@
+Explain quantum entanglement in simple terms
+Write a python function to reverse a string
+What is the meaning of life?

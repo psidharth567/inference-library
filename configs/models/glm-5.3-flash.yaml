@@ -1,0 +1,19 @@
+hf_repo: zai-org/GLM-5.3-Flash
+description: GLM 5.3 Flash MoE FP8 (block 128x128), sparse MLA + KDA, thinking
+# One server, attention TP2 x DP4 + expert parallel EP8: 8.6k out tok/s per node at 1024 in flight
+# vs 6.3k for TP8+EP at its 512-concurrency peak.  Pure DP8 is memory-starved (replicated
+# attention/KDA weights leave room for 82 KDA state blocks per rank): 3.4k.
+tensor_parallel_size: 2
+enable_expert_parallel: true
+recommended_gpus: 8
+max_num_seqs: 256  # per DP rank
+max_model_len: 65536
+reasoning_parser: glm45
+tool_call_parser: glm47
+trust_remote_code: true
+# FLASHINFER_CUTLASS (the auto pick) crashed at the first MoE call with a missing cubin -- seen while
+# server caches were shared, so possibly that race; deep_gemm is what was measured
+vllm_args: ["--moe-backend", "deep_gemm", "--api-server-count", "4"]
+env:
+  # FlashInfer's one-shot all-reduce hung TP=8 startup of these models (see deepseek-v4-flash.yaml)
+  VLLM_ALLREDUCE_USE_FLASHINFER: "0"

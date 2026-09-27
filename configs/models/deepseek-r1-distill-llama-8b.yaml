@@ -1,0 +1,8 @@
+hf_repo: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+description: R1 distilled into Llama-3.1 8B, always reasons
+tensor_parallel_size: 1
+recommended_gpus: 8
+max_model_len: 32768
+reasoning_parser: deepseek_r1
+# transformers>=5 rebuilds the declared LlamaTokenizerFast as SentencePiece: wrong ids both ways
+tokenizer_class: PreTrainedTokenizerFast

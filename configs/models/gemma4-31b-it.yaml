@@ -1,0 +1,8 @@
+hf_repo: google/gemma-4-31B-it
+description: Gemma 4 31B dense instruct, VL
+# TP4 x DP2: 1.29k out tok/s/GPU vs 1.11k at TP2 and 1.10k at TP8 (KV-bound: 512-dim global heads)
+tensor_parallel_size: 4
+recommended_gpus: 8
+max_model_len: 32768
+reasoning_parser: gemma4
+tool_call_parser: gemma4
