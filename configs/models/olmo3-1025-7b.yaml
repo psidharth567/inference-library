@@ -1,0 +1,9 @@
+hf_repo: allenai/Olmo-3-1025-7B
+description: OLMo 3 7B base (pretrained, no chat template)
+# TP1 x DP8: 2.51k out tok/s/GPU vs 2.40k at TP2 (no GQA: KV-cache bound)
+tensor_parallel_size: 1
+recommended_gpus: 8
+max_model_len: 32768
+# Base model, no chat template: messages are joined as raw text and the model continues it
+vllm_args:
+  - "--chat-template={%- for m in messages -%}{{ m['content'] }}{%- if not loop.last -%}{{ '\\n\\n' }}{%- endif -%}{%- endfor -%}"

@@ -1,0 +1,9 @@
+hf_repo: allenai/OLMo-2-1124-13B
+description: OLMo 2 13B base (pretrained, no chat template)
+# TP2 x DP4: 1.45k out tok/s/GPU vs 1.30k at TP1 (no GQA: TP2 doubles KV room)
+tensor_parallel_size: 2
+recommended_gpus: 8
+max_model_len: 4096
+# Base model, no chat template: messages are joined as raw text and the model continues it
+vllm_args:
+  - "--chat-template={%- for m in messages -%}{{ m['content'] }}{%- if not loop.last -%}{{ '\\n\\n' }}{%- endif -%}{%- endfor -%}"

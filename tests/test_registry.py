@@ -19,6 +19,10 @@ EXPECTED = {
     "gemma4-26b-a4b-it",
     "gemma4-31b-it",
     "olmo3-32b-think-dpo",
+    "olmo3-1125-32b",
+    "olmo3-1025-7b",
+    "olmo2-1124-13b",
+    "olmo2-1124-7b",
     "deepseek-r1-distill-llama-8b",
     "deepseek-v4-flash",
     "glm-5.3-flash",
@@ -112,3 +116,11 @@ def test_presets_sharing_a_repo_share_weights(tmp_path, monkeypatch):
     (d / "model.safetensors.index.json").write_text("{}")
     monkeypatch.setenv("INFERENCE_MODELS_DIR", str(tmp_path))
     assert resolve_model_path("glm-5.3-flash-legacy") == str(d.resolve())
+
+
+def test_base_olmo_presets_pass_a_raw_chat_template():
+    for key in ("olmo3-1125-32b", "olmo3-1025-7b", "olmo2-1124-13b", "olmo2-1124-7b"):
+        args = build_vllm_args(REGISTRY[key], "/m")
+        template = [a for a in args if a.startswith("--chat-template=")]
+        assert len(template) == 1 and "messages" in template[0], key
+        assert REGISTRY[key].reasoning_parser is None

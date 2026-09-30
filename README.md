@@ -42,6 +42,10 @@ Every preset (`configs/models/<key>.yaml`) uses the layout that measured fastest
 | `gemma4-26b-a4b-it` | 4 servers, TP2 each | 4,597 | whole node: 36.8k |
 | `gemma4-31b-it` | 1 server, TP4 x DP2 | 1,294 | whole node: 10.4k |
 | `olmo3-32b-think-dpo` | 1 server, TP2 x DP4 | 1,747 | one TP2 replica (TP4: 1,699) |
+| `olmo3-1125-32b` | 1 server, TP2 x DP4 | 1,739 | one TP2 replica (TP4: 1,663) |
+| `olmo3-1025-7b` | 1 server, TP1 x DP8 | 2,512 | one GPU (TP2: 2,398) |
+| `olmo2-1124-13b` | 1 server, TP2 x DP4 | 1,450 | one TP2 replica (TP1: 1,296) |
+| `olmo2-1124-7b` | 1 server, TP1 x DP8 | 2,621 | one GPU (TP2: 2,507) |
 | `deepseek-r1-distill-llama-8b` | 1 server, TP1 x DP8 | 7,422 | one GPU |
 | `deepseek-v4-flash` | 1 server, DP8 attention + EP8 | 2,877 | whole node: 23.0k at 4096 in flight |
 | `glm-5.3-flash` | 1 server, TP2 x DP4 attention + EP8 | 1,072 | whole node: 8.6k at 1024 in flight |
@@ -49,6 +53,12 @@ Every preset (`configs/models/<key>.yaml`) uses the layout that measured fastest
 "One replica" rows are per-GPU numbers from one server of the preset's size. Dense models'
 in-server DP measured linear (Qwen3-8B: 6,679 tok/s on 1 GPU, 6,616 per GPU on 8), so those
 numbers carry over to the whole node.
+
+The four OLMo base models (`olmo3-1125-32b`, `olmo3-1025-7b`, `olmo2-1124-13b`, `olmo2-1124-7b`,
+measured 2026-09-30) ship no chat template. Their presets pass one that joins the messages as raw
+text, so `chat`/`batch` return a plain continuation of the prompt (no reasoning, and generation
+often runs to `--max-tokens`). The 7B/13B models have no GQA (32/40 KV heads), so they are
+KV-cache bound: 2.5k tok/s per GPU vs Qwen3-8B's 6.6k. OLMo 2 has a 4,096-token context.
 
 Any other HF repo id or local path works with vLLM defaults: `inference serve org/model --num-gpus 2`.
 

@@ -73,6 +73,8 @@ truncation at `--max-tokens`.
   layout is measured faster for that model.
 - Don't pass `--allow-mixed` to get past a refused resume: the refusal means the stack or settings
   changed; write a new output unless mixing is intended.
+- Base-model presets (`olmo3-1125-32b`, `olmo3-1025-7b`, `olmo2-1124-*`) have no chat template:
+  their preset joins messages as raw text, so the output is a continuation, not an answer.
 - Keep BF16 KV as the default; FP8 KV is opt-in (README has the quality measurement).
 - Big models (GLM-5.3-Flash, DSV4-Flash) take 5-15 min to start cold. Don't kill them before
   the preset's timeout; follow `logs/inference-<key>-<port>.log`.
